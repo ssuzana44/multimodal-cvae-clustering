@@ -126,11 +126,12 @@ def purity_score(y_true, y_pred):
     return np.sum(np.amax(cm, axis=0)) / np.sum(cm)
 
 def evaluate_method_hard(X_features, y_true, method_name):
+    n_classes = len(np.unique(y_true))
     if "Spectral" in method_name:
-        clusterer = SpectralClustering(n_clusters=2, affinity='nearest_neighbors', random_state=42)
+        clusterer = SpectralClustering(n_clusters=n_classes, affinity='nearest_neighbors', random_state=42)
         labels = clusterer.fit_predict(X_features)
     else:
-        kmeans = KMeans(n_clusters=2, random_state=42)
+        kmeans = KMeans(n_clusters=n_classes, random_state=42)
         labels = kmeans.fit_predict(X_features)
         
     sil = silhouette_score(X_features, labels)

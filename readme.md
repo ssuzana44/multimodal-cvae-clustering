@@ -7,6 +7,5 @@ This project implements a **Conditional Variational Autoencoder (CVAE)** to perf
 This system tackles the "Hard Task" of multimodal learning:
 1.  **Input:** Raw Audio (MFCC features) + Lyrics (Tokenized Text) + Condition (Language Label).
 2.  **Model:** A Conditional VAE that forces the model to learn content (lyrics/melody) separately from the category (language).
-3.  **Goal:** * Reconstruct both Audio and Text accurately.
-    * Generate lyrics conditioned on a specific language.
-    * Evaluate clustering performance against baselines (PCA, K-Means, Autoencoders).
+3.  **Goal:** * Condition the latent space on **5 Universal Genres** (Rock, Pop, Hip-Hop, Folk, Classical).
+    * Evaluate how well the model separates these genres compared to baselines.
