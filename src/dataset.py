@@ -3,6 +3,8 @@ import numpy as np
 import torch
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from transformers import AutoTokenizer, AutoModel
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.preprocessing import LabelEncoder
 
 # PATHS
 AUDIO_BANGLA = "../data/audio/dataset.csv"
@@ -187,3 +189,112 @@ def load_hybrid_data():
     y_genres = np.hstack([y_genre_b[:n_samples], y_genre_e[:n_samples]]) # Labels 0-4
     
     return X_audio_train, X_text_train, y_genres
+
+
+
+def load_torch_simple_bangla():
+    """Loads Bangla Audio Features for Beta-VAE"""
+    df = pd.read_csv(AUDIO_BANGLA)
+    
+    ignore_cols = ['file_name', 'label', 'audio_path', 'lyrics', 'genre', 'id', 'title']
+    feature_cols = [c for c in df.columns if c not in ignore_cols]
+    
+    # Log what we found to avoid confusion
+    print(f"Found {len(feature_cols)} feature columns: {feature_cols[:3]}...")
+    
+    data = df[feature_cols].values.astype(np.float32)
+    
+    # Normalize
+    scaler = MinMaxScaler()
+    data = scaler.fit_transform(data)
+    
+    return torch.tensor(data), df['label'].values
+    
+
+def load_torch_merged():
+    print("Loading and merging datasets...")
+
+    # 1. Load the raw CSVs (Using global constants for paths)
+    df_bangla = pd.read_csv(AUDIO_BANGLA)
+    df_english = pd.read_csv(AUDIO_ENGLISH)
+
+    
+    df_english = df_english.sample(frac=1, random_state=42).reset_index(drop=True)
+
+    # 2. Define the Columns (Manual Alignment)
+    # Bangla Mapping
+    b_cols = ['spectral_centroid', 'spectral_bandwidth', 'spectral_rolloff', 'tempo']
+    b_cols += [f'mfcc{i}' for i in range(20)]
+
+    # English Mapping
+    e_cols = ['spectral_centroid_mean', 'spectral_bandwidth_mean', 'rolloff_mean', 'tempo']
+    e_cols += [f'mfcc{i}_mean' for i in range(1, 21)]
+
+    # 3. Extract and Rename
+    X_b = df_bangla[b_cols].copy()
+    X_b.columns = [f'feat_{i}' for i in range(len(b_cols))]
+    y_b = "Bangla_" + df_bangla['label'].astype(str)
+
+    X_e = df_english[e_cols].copy()
+    X_e.columns = [f'feat_{i}' for i in range(len(e_cols))]
+    y_e = "English_" + df_english['label'].astype(str)
+
+    # 4. Concatenate
+    X_merged = pd.concat([X_b, X_e], axis=0)
+    y_merged = pd.concat([y_b, y_e], axis=0)
+
+    print(f"Merged shapes: {X_merged.shape}")
+    print(f"Unique English Genres found: {df_english['label'].unique()}") 
+
+    # 5. Normalize (StandardScaler)
+    print("Applying StandardScaler to bridge the Domain Gap...")
+    scaler = StandardScaler()
+    X_final = scaler.fit_transform(X_merged.values)
+
+    return torch.tensor(X_final, dtype=torch.float32), y_merged.values
+
+def load_cvae_data_exact():
+    print("Loading Bangla Dataset (CVAE Exact)...")
+    
+    # 1. Load separately (Using global path constants)
+    df_audio = pd.read_csv(AUDIO_BANGLA) 
+    df_text = pd.read_csv(LYRICS_BANGLA) 
+    
+    # 2. Align (Truncate to minimum)
+    min_len = min(len(df_audio), len(df_text))
+    df_audio = df_audio.iloc[:min_len]
+    df_text = df_text.iloc[:min_len]
+    
+    # 3. Inject Lyrics
+    df_audio['lyrics'] = df_text['lyrics'].fillna("").values
+    
+    # 4. Audio Features
+    ignore_cols = ['file_name', 'label', 'audio_path', 'lyrics', 'genre', 'id', 'title', 'category']
+    feat_cols = [c for c in df_audio.columns if c not in ignore_cols]
+    
+    audio_data = df_audio[feat_cols].values.astype(np.float32)
+    scaler = MinMaxScaler()
+    audio_data = scaler.fit_transform(audio_data)
+    
+    # 5. Lyrics Features
+    print("Vectorizing Lyrics...")
+    tfidf = TfidfVectorizer(max_features=128)
+    lyrics_data = tfidf.fit_transform(df_audio['lyrics']).toarray()
+    
+    # 6. Labels (Genre)
+    le = LabelEncoder()
+    genres_raw = df_audio['label'].values
+    genre_indices = le.fit_transform(genres_raw)
+    num_genres = len(le.classes_)
+    
+    # One-Hot Encoding
+    genre_onehot = np.zeros((len(genres_raw), num_genres))
+    genre_onehot[np.arange(len(genres_raw)), genre_indices] = 1
+    
+    return (torch.tensor(audio_data, dtype=torch.float32), 
+            torch.tensor(lyrics_data, dtype=torch.float32), 
+            torch.tensor(genre_onehot, dtype=torch.float32),
+            le.classes_,
+            genres_raw,  
+            audio_data.shape[1],
+            num_genres)

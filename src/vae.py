@@ -1,7 +1,8 @@
 import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras import layers, backend as K
-
+import torch
+import torch.nn as nn
   
 # SHARED SAMPLING LAYER
 class Sampling(layers.Layer):
@@ -203,3 +204,132 @@ def build_cvae(cond_dim=2):
     decoder = keras.Model([lat_in, cond_in], [d1, d2])
     
     return encoder, decoder
+
+
+
+class SimpleBetaVAE_Torch(nn.Module):
+    def __init__(self, input_dim): 
+        super().__init__()
+        self.encoder = nn.Sequential(
+            nn.Linear(input_dim, 128),
+            nn.ReLU(),
+            nn.Linear(128, 64),
+            nn.ReLU()
+        )
+        self.fc_mu = nn.Linear(64, 2)    
+        self.fc_var = nn.Linear(64, 2)
+        
+        self.decoder = nn.Sequential(
+            nn.Linear(2, 64),
+            nn.ReLU(),
+            nn.Linear(64, 128),
+            nn.ReLU(),
+            nn.Linear(128, input_dim),
+            nn.Sigmoid()
+        )
+
+    def reparameterize(self, mu, logvar):
+        std = torch.exp(0.5 * logvar)
+        eps = torch.randn_like(std)
+        return mu + eps * std
+
+    def forward(self, x):
+        x_enc = self.encoder(x)
+        mu = self.fc_mu(x_enc)
+        logvar = self.fc_var(x_enc)
+        z = self.reparameterize(mu, logvar)
+        recon = self.decoder(z)
+        return recon, mu, logvar
+
+def beta_vae_loss_torch(recon_x, x, mu, logvar, beta=4.0):
+    mse = nn.functional.mse_loss(recon_x, x, reduction='sum')
+    kld = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
+    return mse + (beta * kld)
+
+
+class CVAE_Exact(nn.Module):
+    def __init__(self, audio_dim, text_dim, cond_dim, latent_dim=16, hidden_dim=256):
+        super().__init__()
+        self.latent_dim = latent_dim
+        
+        # Encoder
+        input_total = audio_dim + text_dim + cond_dim
+        self.encoder = nn.Sequential(
+            nn.Linear(input_total, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim // 2),
+            nn.ReLU()
+        )
+        self.fc_mu = nn.Linear(hidden_dim // 2, latent_dim)
+        self.fc_logvar = nn.Linear(hidden_dim // 2, latent_dim)
+        
+        # Decoder
+        decoder_input = latent_dim + cond_dim
+        self.decoder = nn.Sequential(
+            nn.Linear(decoder_input, hidden_dim // 2),
+            nn.ReLU(),
+            nn.Linear(hidden_dim // 2, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, audio_dim),
+            nn.Sigmoid() 
+        )
+
+    def reparameterize(self, mu, logvar):
+        std = torch.exp(0.5 * logvar)
+        eps = torch.randn_like(std)
+        return mu + eps * std
+
+    def forward(self, audio, text, condition):
+        inputs = torch.cat([audio, text, condition], dim=1)
+        h = self.encoder(inputs)
+        mu = self.fc_mu(h)
+        logvar = self.fc_logvar(h)
+        z = self.reparameterize(mu, logvar)
+        
+        z_cond = torch.cat([z, condition], dim=1)
+        recon_audio = self.decoder(z_cond)
+        return recon_audio, mu, logvar
+
+def cvae_loss_exact(recon, x, mu, logvar, beta=2.0):
+    mse = nn.functional.mse_loss(recon, x, reduction='sum')
+    kld = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
+    return mse + (beta * kld)
+
+
+class MergedBetaVAE_Torch(nn.Module):
+    def __init__(self, input_dim):
+        super().__init__()
+        # Encoder (With BatchNorm as per your merged snippet)
+        self.encoder = nn.Sequential(
+            nn.Linear(input_dim, 128),
+            nn.BatchNorm1d(128),      
+            nn.ReLU(),
+            nn.Linear(128, 64),
+            nn.BatchNorm1d(64),       
+            nn.ReLU()
+        )
+        self.fc_mu = nn.Linear(64, 2) # Latent=2
+        self.fc_var = nn.Linear(64, 2)
+
+        # Decoder
+        self.decoder = nn.Sequential(
+            nn.Linear(2, 64),
+            nn.ReLU(),
+            nn.Linear(64, 128),
+            nn.ReLU(),
+            nn.Linear(128, input_dim),
+            nn.Sigmoid()
+        )
+
+    def reparameterize(self, mu, logvar):
+        std = torch.exp(0.5 * logvar)
+        eps = torch.randn_like(std)
+        return mu + eps * std
+
+    def forward(self, x):
+        x_enc = self.encoder(x)
+        mu = self.fc_mu(x_enc)
+        logvar = self.fc_var(x_enc)
+        z = self.reparameterize(mu, logvar)
+        recon = self.decoder(z)
+        return recon, mu, logvar
